@@ -10,6 +10,8 @@ from collections import defaultdict
 from ..utils.analysis_utils import results2json, accumuluate_analysis 
 from ..visualization import show_track_result
 
+import pprint
+
 def mmdet_single_gpu_test(model,
                     data_loader,
                     model_results=None,
@@ -23,11 +25,13 @@ def mmdet_single_gpu_test(model,
     Saves sample images every 500 iterations if out_dir is specified
     or show is True.
     """
+    pprint.pprint('***single gpu test, initializing')
     model.eval()
     results = []
     dataset = data_loader.dataset
     PALETTE = getattr(dataset, 'PALETTE', None)
     prog_bar = mmcv.ProgressBar(len(dataset))
+    pprint.pprint('\n***MMDet single gpu test, starting inference')
     for i, data in enumerate(data_loader):
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
@@ -116,14 +120,24 @@ def mmtrack_single_gpu_test(model,
         df = None
     
     prev_result = None
+    pprint.pprint("***MMTrack single gpu test, starting inference")
+    pprint.pprint(f"Total number of frames to process: {len(data_loader)}")
     for i, data in enumerate(data_loader):
         #* each `i` is a frame
         #* the loop iterates over all frames in the dataset (i.e. all videos)
         frame_id = data['img_metas'][0].data[0][0]['frame_id']
+        print("keys:", data['img_metas'][0].data[0][0].keys()) # TODO: remove this after testing
+        # mot_frame_id = data['img_metas'][0].data[0][0]['mot_frame_id']
+        print(f'\nProcessing frame with frame_id {frame_id}') # TODO: remove this after testing
         if model_results is None:
             with torch.no_grad():
                 result = model(return_loss=False, rescale=True, **data,
                             analysis_cfg=analysis_cfg)
+                
+                # print(f"Model returned keys: {list(result.keys())}") # TODO: remove this after testing
+                pprint.pprint(f"Model number of detections in frame {frame_id}: detection shape {np.array(result['det_bboxes'][0]).shape}, tracks shape {np.array(result['track_bboxes'][0]).shape}") # TODO: remove this after testing
+                # print(f"det_bboxes: {result['det_bboxes']}") # TODO: remove this after testing
+                # print(f"track_bboxes: {result['track_bboxes']}") # TODO: remove this after testing
         else:
             result = {k: v[i] for k, v in model_results.items()}
         batch_size = data['img'][0].size(0)
@@ -172,10 +186,14 @@ def mmtrack_single_gpu_test(model,
                 
         prev_result = result    #* only works if the current frame is not the first frame in seq
         for k, v in result.items():
+            # print(f"Added to Results, key {k} with value {v}") # TODO: remove this after testing
             results[k].append(v)
 
         for _ in range(batch_size):
             prog_bar.update()
+    
+    pprint.pprint(f"Lengths of each value in results dict: {[len(v) for v in results.values()]}")
+    pprint.pprint(f"End inferrence for {len(data_loader)} frames")
 
     #? Filter out extra analysis results here
     analysis_results = results.pop(analysis_cfg.get('type', ''), [])
@@ -187,7 +205,9 @@ def mmtrack_single_gpu_test(model,
             results2json(analysis_dict, analysis_cfg['save_dir'])
         except:
             print('Failed to save analysis results to file')
-        
+
+    print(f"\nFinal keys in results dict: {list(results.keys())}")
+    print(f"Lengths of each value in results dict: {[len(v) for v in results.values()]}")
     return results
 
 def _interpolate_track(track, track_id, max_num_frames=20):

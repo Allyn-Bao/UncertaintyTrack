@@ -4,6 +4,8 @@ import os
 import os.path as osp
 import time
 import pickle
+import cv2
+import numpy as np
 
 import mmcv
 import torch
@@ -124,6 +126,7 @@ def main():
         from mmtrack.apis import multi_gpu_test
         from mmtrack.datasets import build_dataloader
         from mmtrack.models import build_model
+        print("**Using MMTrack dataloader")
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
@@ -170,40 +173,95 @@ def main():
 
     # build the model and load checkpoint
     if cfg.get('test_cfg', False):
+        print("**Building model with test_cfg")
         model = build_model(
             cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
     else:
+        print("**No test_cfg found in cfg, using default test_cfg in model")
         model = build_model(cfg.model)
     # We need call `init_weights()` to load pretained weights in MOT task.
     model.init_weights()
     fp16_cfg = cfg.get('fp16', None)
     if fp16_cfg is not None:
         wrap_fp16_model(model)
+    print("args.checkpoint:", args.checkpoint)
     if args.checkpoint is not None:
         checkpoint = load_checkpoint(
             model, args.checkpoint, map_location='cpu')
         if 'meta' in checkpoint and 'CLASSES' in checkpoint['meta']:
             model.CLASSES = checkpoint['meta']['CLASSES']
+    
+        # print(f'**Loading checkpoint from {args.checkpoint}')
+        # try:
+        #     # Attempt standard load
+        #     from mmcv.runner import load_checkpoint
+        #     checkpoint = load_checkpoint(model, args.checkpoint, map_location='cpu')
+
+        #     # Set CLASSES if available
+        #     if 'meta' in checkpoint and 'CLASSES' in checkpoint['meta']:
+        #         model.CLASSES = checkpoint['meta']['CLASSES']
+        # except Exception as e:
+        #     print(f'[WARNING] Standard load_checkpoint failed: {e}')
+        #     print('[INFO] Falling back to custom checkpoint loading...')
+
+        #     # --- START custom load fallback ---
+        #     import torch  # Ensure imported at top
+        #     def clean_state_dict(state_dict):
+        #         cleaned = {}
+        #         for k, v in state_dict.items():
+        #             if k.startswith('ema_'):
+        #                 continue
+        #             if k.startswith('module.'):
+        #                 k = k[len('module.'):]
+        #             cleaned[k] = v
+        #         return cleaned
+
+        #     # Load raw checkpoint
+        #     ckpt = torch.load(args.checkpoint, map_location='cpu')
+        #     raw_state_dict = ckpt.get('state_dict', ckpt)
+        #     cleaned_state_dict = clean_state_dict(raw_state_dict)
+
+        #     # Load into model with relaxed key checking
+        #     missing_keys, unexpected_keys = model.load_state_dict(cleaned_state_dict, strict=False)
+        #     print("Missing keys:", missing_keys)
+        #     print("Unexpected keys:", unexpected_keys)
+
+        #     # Set CLASSES if present
+        #     if 'meta' in ckpt and 'CLASSES' in ckpt['meta']:
+        #         model.CLASSES = ckpt['meta']['CLASSES']
+        #     # --- END custom load fallback ---
+
     if not hasattr(model, 'CLASSES'):
         model.CLASSES = dataset.CLASSES
 
     if args.fuse_conv_bn:
+        Print('**Fusing conv and bn...')
         model = fuse_conv_bn(model)
 
     #? Check if output already exists
     analysis_cfg = cfg.get('analysis_cfg', {})
+    print("=== DEBUG: Final analysis_cfg ===")
+    print(analysis_cfg)
     if analysis_cfg.get('save_dir', None) is not None:
         analysis_cfg['save_dir'] = osp.join(args.work_dir, 
                                             analysis_cfg['save_dir'])
     try:
+        print("**Trying to load existing output file:", args.out)
         with open(args.out, 'rb') as f:
             outputs = pickle.load(f)
+            # print("Output file")
+            # print(outputs)
     except FileNotFoundError:
         outputs = None
     
+    print("**Right before gpu test")
+    print("outputs is None? ", outputs is None)
+    print("args.show_dir is None?", args.show_dir is not None)
     if outputs is None or args.show_dir is not None:
+        print("**Running gpu test")
         if not distributed:
             model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
+            print("**Single GPU test")
             outputs = single_gpu_test(
                 model,
                 data_loader,
@@ -213,6 +271,7 @@ def main():
                 show_score_thr=args.show_score_thr,
                 analysis_cfg=analysis_cfg)
         else:
+            print("**Multi GPU test")
             model = build_ddp(
                 model,
                 cfg.device,
@@ -227,15 +286,60 @@ def main():
 
             outputs = multi_gpu_test(model, data_loader, args.tmpdir,
                                     args.gpu_collect)
-
+    print("**Right before writing results")
     rank, _ = get_dist_info()
+    print("Rank:", rank)
     if rank == 0:
         if args.out and not os.path.exists(args.out):
             print(f'\nwriting results to {args.out}')
+            print(f"Output keys: {list(outputs.keys())}")
+            print(f"Output lengths: {[len(v) for v in outputs.values()]}")
+            print()
             mmcv.dump(outputs, args.out)
         kwargs = {} if args.eval_options is None else args.eval_options
         if args.format_only:
-            dataset.format_results(outputs, **kwargs)
+            print(f"Dataset type {type(dataset)}")
+            format_result_tuple = dataset.format_results(outputs, **kwargs)
+            # resfile = "formatted_results.txt"
+            # dataset.format_track_results(outputs["track_bboxes"], dataset.data_infos, resfile, **kwargs)
+            print("Format Result tuple:", format_result_tuple)
+
+            # -- added generate resfiles for video annotations --
+            res_root, resfiles, seq_names, tmp_dir = format_result_tuple
+            annotate_results_from_txt(
+                dataset.img_prefix,        # path to MOT17 images root
+                resfiles['track'],         # folder of .txt result files
+                seq_names,                 # list of video names like "MOT17-10-SDP"
+                output_dir='./annotated_videos'  # destination
+            )
+            total_frames = 0
+            # -- debug print to check frame ranges in each result file --
+            from pathlib import Path
+            # Set this to the directory where your tracking results are saved
+            track_dir = Path(resfiles['track'])  # adjust if needed
+            for track_file in track_dir.glob("*.txt"):
+                frames = []
+                with open(track_file) as f:
+                    last_frame = -1
+                    num_detections_for_frame = 0
+                    for line in f:
+                        if line.strip():
+                            frame_id = int(line.strip().split(',')[0])
+                            frames.append(frame_id)
+                            if frame_id == last_frame:
+                                num_detections_for_frame += 1
+                            else:
+                                if last_frame != -1:
+                                    print(f"  Frame {last_frame} had {num_detections_for_frame} detections")
+                                num_detections_for_frame = 1
+                                last_frame = frame_id
+                if frames:
+                    print(f"{track_file.name}: min_frame = {min(frames)}, max_frame = {max(frames)}, total unique frames = {len(set(frames))}")
+                    total_frames += len(set(frames))
+                else:
+                    print(f"{track_file.name}: No frames")
+            print(f"Total frames across all sequences: {total_frames}")
+
         if args.eval:
             eval_kwargs = cfg.get('evaluation', {}).copy()
             if eval_kwargs:
@@ -253,6 +357,67 @@ def main():
                     config=args.config, mode='test', epoch=cfg.total_epochs)
                 metric_dict.update(metric)
 
+
+# -- added function to annotate video from tracking results --
+from tqdm import tqdm
+def annotate_results_from_txt(dataset_root, resfile_dir, seq_names, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+
+    for seq_name in seq_names:
+        gt_file = os.path.join(dataset_root, seq_name, 'gt', 'gt.txt')
+        img_dir = os.path.join(dataset_root, seq_name, 'img1')
+        track_file = os.path.join(resfile_dir, f'{seq_name}.txt')
+        print(f"[>] Annotating {seq_name}, GT: {gt_file}, Track: {track_file}, img_dir: {img_dir}")
+
+        # Load GT
+        gt_dict = {}
+        with open(gt_file) as f:
+            for line in f:
+                frame_id, _, x, y, w, h, _, _, _ = map(float, line.strip().split(','))
+                gt_dict.setdefault(int(frame_id), []).append([x, y, w, h])
+
+        # Load tracking results
+        track_dict = {}
+        with open(track_file) as f:
+            for line in f:
+                frame_id, track_id, x, y, w, h, score, *_ = map(float, line.strip().split(','))
+                track_dict.setdefault(int(frame_id), []).append([x, y, w, h, track_id])
+
+        # Get image size and number of frames
+        image_files = sorted([f for f in os.listdir(img_dir) if f.endswith('.jpg')])
+        if not image_files:
+            continue
+        num_frames = len(image_files)
+        H, W = cv2.imread(os.path.join(img_dir, image_files[0])).shape[:2]
+
+        # Setup writer
+        out_path = os.path.join(output_dir, f"{seq_name}_annotated.mp4")
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), 30, (W, H))
+
+        # === Annotate ===
+        for frame_id in tqdm(range(1, num_frames + 1), desc=f"[{seq_name}]"):
+
+            img_path = os.path.join(img_dir, f"{frame_id:06d}.jpg")
+            if not os.path.exists(img_path):
+                continue
+            img = cv2.imread(img_path)
+
+            # Draw GT (green)
+            for x, y, w, h in gt_dict.get(frame_id, []):
+                x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(img, 'GT', (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            
+            # Draw Tracks (red)
+            for x, y, w, h, track_id in track_dict.get(frame_id, []):
+                x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(img, f'ID {int(track_id)}', (x1, y2 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+            writer.write(img)
+
+        writer.release()
+        print(f"[✓] Saved: {out_path}")
 
 if __name__ == '__main__':
     main()

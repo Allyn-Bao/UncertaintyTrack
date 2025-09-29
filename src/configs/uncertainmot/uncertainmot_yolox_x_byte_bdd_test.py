@@ -25,7 +25,8 @@ model = dict(
         init_cfg=dict(
             type='Pretrained',
             checkpoint=  # noqa: E251
-            f"/home/results/{weights_path}/latest.pth"  # noqa: E501
+            # f"/home/results/{weights_path}/latest.pth"  # noqa: E501
+            f"/home/allynbao/project/UncertaintyTrack/src/checkpoints/{weights_path}/latest.pth"  # noqa: E501
         )
     ),
     motion=dict(type='KalmanFilterWithUncertainty'),
@@ -86,7 +87,7 @@ test_pipeline = [
             dict(type='VideoCollect', keys=['img'])
         ])
 ]
-data_root = '/home/data/bdd100k/'
+data_root = '/home/allynbao/project/UncertaintyTrack/src/data/bdd100k/'
 data = dict(
     workers_per_gpu=8,
     persistent_workers=True,

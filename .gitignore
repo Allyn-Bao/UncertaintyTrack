@@ -1,1 +1,30 @@
 **/__pycache__
+
+# Build / output files
+*.out
+*.log
+*.pkl
+src/work_dirs/test_run/
+
+# Images / videos
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+
+# Python cache
+*.pyc
+
+# Mac / system files
+.DS_Store
+Thumbs.db
+
+# ignore dataset
+src/data/
+
+# ignore output videos
+src/annotated_videos/
+
+# model checkpoints
+*.pth

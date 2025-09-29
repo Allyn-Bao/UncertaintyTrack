@@ -5,10 +5,10 @@ _base_ = [
 
 # some hyper parameters
 img_scale = (800, 1440)
-samples_per_gpu = 6
+samples_per_gpu = 1
 num_gpus = 3
-total_epochs = 80
-num_last_epochs = 10
+total_epochs = 3
+num_last_epochs = 1
 resume_from = None
 interval = 5
 exp_name = "bytetrack_yolox_x_3x6_mot17-half"
@@ -24,7 +24,9 @@ model = dict(
         init_cfg=dict(
             type='Pretrained',
             checkpoint=  # noqa: E251
-            '/home/misc/yolox_x_8x8_300e_coco_20211126_140254-1ef88d67.pth'  # noqa: E501
+            # '/home/misc/yolox_x_8x8_300e_coco_20211126_140254-1ef88d67.pth'  # noqa: E501
+            # '/home/allynbao/project/UncertaintyTrack/src/checkpoints/yolox_x_8x8_300e_coco_20211126_140254-1ef88d67.pth'
+            '/home/allynbao/project/UncertaintyTrack/src/work_dirs/test_run/latest.pth'
         )),
     motion=dict(type='KalmanFilter'),
     tracker=dict(
@@ -125,13 +127,20 @@ data = dict(
         dataset=dict(
             type='CocoDataset',
             ann_file=[
-                '/home/data/MOT17/annotations/half-train_cocoformat.json',
-                '/home/data/crowdhuman/annotations/crowdhuman_train.json',
-                '/home/data/crowdhuman/annotations/crowdhuman_val.json'
+                # '/home/data/MOT17/annotations/half-train_cocoformat.json',
+                # '/home/data/crowdhuman/annotations/crowdhuman_train.json',
+                # '/home/data/crowdhuman/annotations/crowdhuman_val.json'
+                # '/home/allynbao/project/UncertaintyTrack/src/data/MOT17/annotations/half-train_cocoformat.json',
+                # '/home/allynbao/project/UncertaintyTrack/src/data/MOT17/annotations/half-val_cocoformat.json'
+                '/home/allynbao/project/UncertaintyTrack/src/data/MOT17/annotations/test_cocoformat.json'
+
             ],
             img_prefix=[
-                '/home/data/MOT17/train', '/home/data/crowdhuman/train',
-                '/home/data/crowdhuman/val'
+                # '/home/data/MOT17/train', 
+                # '/home/data/crowdhuman/train',
+                # '/home/data/crowdhuman/val'
+                # '/home/allynbao/project/UncertaintyTrack/src/data/MOT17/train'
+                '/home/allynbao/project/UncertaintyTrack/src/data/MOT17/test'
             ],
             classes=('pedestrian', ),
             pipeline=[
@@ -145,7 +154,16 @@ data = dict(
         interpolate_tracks_cfg=dict(min_num_frames=5, max_num_frames=20)),
     test=dict(
         pipeline=test_pipeline,
-        interpolate_tracks_cfg=dict(min_num_frames=5, max_num_frames=20)))
+        interpolate_tracks_cfg=dict(min_num_frames=5, max_num_frames=20),
+        ref_img_sampler=None,
+        ))
+    # test=dict(
+    #     type='MOTChallengeDataset',  # or 'CocoVideoDataset' if needed by your tracker
+    #     ann_file='/home/allynbao/project/UncertaintyTrack/src/data/MOT17/annotations/half-train_cocoformat.json',
+    #     img_prefix='/home/allynbao/project/UncertaintyTrack/src/data/MOT17/train',
+    #     classes=('pedestrian', ),
+    #     pipeline=test_pipeline
+    # ))
 
 # you need to set mode='dynamic' if you are using pytorch<=1.5.0
 fp16 = dict(loss_scale=dict(init_scale=512.))

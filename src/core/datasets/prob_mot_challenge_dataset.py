@@ -11,6 +11,8 @@ from core.utils import results2outs
 from core.visualization import get_ellipse_params
 from core.inference import interpolate_tracks
 
+import pprint
+
 
 @DATASETS.register_module()
 class ProbabilisticMOTChallengeDataset(MOTChallengeDataset):
@@ -33,6 +35,7 @@ class ProbabilisticMOTChallengeDataset(MOTChallengeDataset):
             the videos, tmp_dir is the temporal directory created for saving
             files.
         """
+        pprint.pprint("ProbabilisticMTOChallengeDataset.format_results:")
         assert isinstance(results, dict), 'results must be a dict.'
         if resfile_path is None:
             tmp_dir = tempfile.TemporaryDirectory()
@@ -65,12 +68,14 @@ class ProbabilisticMOTChallengeDataset(MOTChallengeDataset):
                             self.data_infos[inds[i]:inds[i + 1]],
                             f'{resfiles[metric]}/{names[i]}.txt',
                             with_ellipse=with_ellipse)
+                    pprint.pprint(f"Frommatted video {names[i]} for metric {metric}, start frame {results[f'{metric}_bboxes'][ind[i]]}")
 
         return resfile_path, resfiles, names, tmp_dir
     
     def format_track_results(self, bbox_results, bbox_cov_results, infos, resfile, with_ellipse=True):
         """Format tracking results."""
 
+        pprint.pprint("ProbabilisticMTOChallengeDataset.format_track_results:")
         results_per_video = []
         ellipses_per_video = []
         for frame_id, (bbox_result, bbox_cov_result) \
