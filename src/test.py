@@ -66,6 +66,9 @@ def parse_args():
         help='tmp directory used for collecting results from multiple '
         'workers, available when gpu-collect is not specified')
     parser.add_argument(
+        '--result-dir', type=str, default=None,
+        help='directory where all of annotation .txt results are saved.')
+    parser.add_argument(
         '--cfg-options',
         nargs='+',
         action=DictAction,
@@ -190,46 +193,6 @@ def main():
             model, args.checkpoint, map_location='cpu')
         if 'meta' in checkpoint and 'CLASSES' in checkpoint['meta']:
             model.CLASSES = checkpoint['meta']['CLASSES']
-    
-        # print(f'**Loading checkpoint from {args.checkpoint}')
-        # try:
-        #     # Attempt standard load
-        #     from mmcv.runner import load_checkpoint
-        #     checkpoint = load_checkpoint(model, args.checkpoint, map_location='cpu')
-
-        #     # Set CLASSES if available
-        #     if 'meta' in checkpoint and 'CLASSES' in checkpoint['meta']:
-        #         model.CLASSES = checkpoint['meta']['CLASSES']
-        # except Exception as e:
-        #     print(f'[WARNING] Standard load_checkpoint failed: {e}')
-        #     print('[INFO] Falling back to custom checkpoint loading...')
-
-        #     # --- START custom load fallback ---
-        #     import torch  # Ensure imported at top
-        #     def clean_state_dict(state_dict):
-        #         cleaned = {}
-        #         for k, v in state_dict.items():
-        #             if k.startswith('ema_'):
-        #                 continue
-        #             if k.startswith('module.'):
-        #                 k = k[len('module.'):]
-        #             cleaned[k] = v
-        #         return cleaned
-
-        #     # Load raw checkpoint
-        #     ckpt = torch.load(args.checkpoint, map_location='cpu')
-        #     raw_state_dict = ckpt.get('state_dict', ckpt)
-        #     cleaned_state_dict = clean_state_dict(raw_state_dict)
-
-        #     # Load into model with relaxed key checking
-        #     missing_keys, unexpected_keys = model.load_state_dict(cleaned_state_dict, strict=False)
-        #     print("Missing keys:", missing_keys)
-        #     print("Unexpected keys:", unexpected_keys)
-
-        #     # Set CLASSES if present
-        #     if 'meta' in ckpt and 'CLASSES' in ckpt['meta']:
-        #         model.CLASSES = ckpt['meta']['CLASSES']
-        #     # --- END custom load fallback ---
 
     if not hasattr(model, 'CLASSES'):
         model.CLASSES = dataset.CLASSES
@@ -246,7 +209,7 @@ def main():
         analysis_cfg['save_dir'] = osp.join(args.work_dir, 
                                             analysis_cfg['save_dir'])
     try:
-        print("**Trying to load existing output file:", args.out)
+        print("Load existing output file:", args.out)
         with open(args.out, 'rb') as f:
             outputs = pickle.load(f)
             # print("Output file")
@@ -254,11 +217,7 @@ def main():
     except FileNotFoundError:
         outputs = None
     
-    print("**Right before gpu test")
-    print("outputs is None? ", outputs is None)
-    print("args.show_dir is None?", args.show_dir is not None)
     if outputs is None or args.show_dir is not None:
-        print("**Running gpu test")
         if not distributed:
             model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
             print("**Single GPU test")
@@ -286,59 +245,69 @@ def main():
 
             outputs = multi_gpu_test(model, data_loader, args.tmpdir,
                                     args.gpu_collect)
-    print("**Right before writing results")
+    # print("**Right before writing results")
     rank, _ = get_dist_info()
-    print("Rank:", rank)
+    # print("Rank:", rank)
     if rank == 0:
         if args.out and not os.path.exists(args.out):
             print(f'\nwriting results to {args.out}')
-            print(f"Output keys: {list(outputs.keys())}")
+            # print(f"Output keys: {list(outputs.keys())}")
             print(f"Output lengths: {[len(v) for v in outputs.values()]}")
             print()
             mmcv.dump(outputs, args.out)
         kwargs = {} if args.eval_options is None else args.eval_options
         if args.format_only:
-            print(f"Dataset type {type(dataset)}")
+            # print(f"Dataset type {type(dataset)}")
             format_result_tuple = dataset.format_results(outputs, **kwargs)
-            # resfile = "formatted_results.txt"
-            # dataset.format_track_results(outputs["track_bboxes"], dataset.data_infos, resfile, **kwargs)
-            print("Format Result tuple:", format_result_tuple)
+            res_root, resfiles, seq_names, tmp_dir = format_result_tuple
+
+            from pathlib import Path
+            # Set this to the directory where your tracking results are saved
+            track_dir = Path(resfiles['track'])  # adjust if needed
+
+            # make a copy of the annotation .txt from track_dir to specified results dir 
+            print("args.result_dir:", args.result_dir)
+            if args.result_dir is not None:
+                print("**Copying all result .txt files to", args.result_dir)
+                os.makedirs(args.result_dir, exist_ok=True)
+                for track_file in track_dir.glob("*.txt"):
+                    dest_file = Path(args.result_dir) / track_file.name
+                    print(f"Copying {track_file} to {dest_file}")
+                    with open(track_file, 'r') as src, open(dest_file, 'w') as dst:
+                        dst.write(src.read())
 
             # -- added generate resfiles for video annotations --
-            res_root, resfiles, seq_names, tmp_dir = format_result_tuple
             annotate_results_from_txt(
                 dataset.img_prefix,        # path to MOT17 images root
                 resfiles['track'],         # folder of .txt result files
                 seq_names,                 # list of video names like "MOT17-10-SDP"
                 output_dir='./annotated_videos'  # destination
             )
-            total_frames = 0
+            
             # -- debug print to check frame ranges in each result file --
-            from pathlib import Path
-            # Set this to the directory where your tracking results are saved
-            track_dir = Path(resfiles['track'])  # adjust if needed
-            for track_file in track_dir.glob("*.txt"):
-                frames = []
-                with open(track_file) as f:
-                    last_frame = -1
-                    num_detections_for_frame = 0
-                    for line in f:
-                        if line.strip():
-                            frame_id = int(line.strip().split(',')[0])
-                            frames.append(frame_id)
-                            if frame_id == last_frame:
-                                num_detections_for_frame += 1
-                            else:
-                                if last_frame != -1:
-                                    print(f"  Frame {last_frame} had {num_detections_for_frame} detections")
-                                num_detections_for_frame = 1
-                                last_frame = frame_id
-                if frames:
-                    print(f"{track_file.name}: min_frame = {min(frames)}, max_frame = {max(frames)}, total unique frames = {len(set(frames))}")
-                    total_frames += len(set(frames))
-                else:
-                    print(f"{track_file.name}: No frames")
-            print(f"Total frames across all sequences: {total_frames}")
+            # total_frames = 0
+            # for track_file in track_dir.glob("*.txt"):
+            #     frames = []
+            #     with open(track_file) as f:
+            #         last_frame = -1
+            #         num_detections_for_frame = 0
+            #         for line in f:
+            #             if line.strip():
+            #                 frame_id = int(line.strip().split(',')[0])
+            #                 frames.append(frame_id)
+            #                 if frame_id == last_frame:
+            #                     num_detections_for_frame += 1
+            #                 else:
+            #                     if last_frame != -1:
+            #                         print(f"  Frame {last_frame} had {num_detections_for_frame} detections")
+            #                     num_detections_for_frame = 1
+            #                     last_frame = frame_id
+            #     if frames:
+            #         # print(f"{track_file.name}: min_frame = {min(frames)}, max_frame = {max(frames)}, total unique frames = {len(set(frames))}")
+            #         total_frames += len(set(frames))
+            #     else:
+            #         print(f"{track_file.name}: No frames")
+            # print(f"Total frames across all sequences: {total_frames}")
 
         if args.eval:
             eval_kwargs = cfg.get('evaluation', {}).copy()
@@ -367,7 +336,7 @@ def annotate_results_from_txt(dataset_root, resfile_dir, seq_names, output_dir):
         gt_file = os.path.join(dataset_root, seq_name, 'gt', 'gt.txt')
         img_dir = os.path.join(dataset_root, seq_name, 'img1')
         track_file = os.path.join(resfile_dir, f'{seq_name}.txt')
-        print(f"[>] Annotating {seq_name}, GT: {gt_file}, Track: {track_file}, img_dir: {img_dir}")
+        # print(f"[>] Annotating {seq_name}, GT: {gt_file}, Track: {track_file}, img_dir: {img_dir}")
 
         # Load GT
         gt_dict = {}

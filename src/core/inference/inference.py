@@ -126,16 +126,16 @@ def mmtrack_single_gpu_test(model,
         #* each `i` is a frame
         #* the loop iterates over all frames in the dataset (i.e. all videos)
         frame_id = data['img_metas'][0].data[0][0]['frame_id']
-        print("keys:", data['img_metas'][0].data[0][0].keys()) # TODO: remove this after testing
+        # print("keys:", data['img_metas'][0].data[0][0].keys()) # TODO: remove this after testing
         # mot_frame_id = data['img_metas'][0].data[0][0]['mot_frame_id']
-        print(f'\nProcessing frame with frame_id {frame_id}') # TODO: remove this after testing
+        # print(f'\nProcessing frame with frame_id {frame_id}') # TODO: remove this after testing
         if model_results is None:
             with torch.no_grad():
                 result = model(return_loss=False, rescale=True, **data,
                             analysis_cfg=analysis_cfg)
                 
                 # print(f"Model returned keys: {list(result.keys())}") # TODO: remove this after testing
-                pprint.pprint(f"Model number of detections in frame {frame_id}: detection shape {np.array(result['det_bboxes'][0]).shape}, tracks shape {np.array(result['track_bboxes'][0]).shape}") # TODO: remove this after testing
+                # pprint.pprint(f"Model number of detections in frame {frame_id}: detection shape {np.array(result['det_bboxes'][0]).shape}, tracks shape {np.array(result['track_bboxes'][0]).shape}") # TODO: remove this after testing
                 # print(f"det_bboxes: {result['det_bboxes']}") # TODO: remove this after testing
                 # print(f"track_bboxes: {result['track_bboxes']}") # TODO: remove this after testing
         else:
@@ -192,7 +192,7 @@ def mmtrack_single_gpu_test(model,
         for _ in range(batch_size):
             prog_bar.update()
     
-    pprint.pprint(f"Lengths of each value in results dict: {[len(v) for v in results.values()]}")
+    # pprint.pprint(f"Lengths of each value in results dict: {[len(v) for v in results.values()]}")
     pprint.pprint(f"End inferrence for {len(data_loader)} frames")
 
     #? Filter out extra analysis results here
