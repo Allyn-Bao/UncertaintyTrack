@@ -5,6 +5,7 @@
 *.log
 *.pkl
 src/work_dirs/test_run/
+src/outputs/**/*.txt
 
 # Images / videos
 *.jpg
